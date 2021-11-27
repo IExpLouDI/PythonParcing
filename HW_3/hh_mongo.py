@@ -27,20 +27,53 @@ def zp_check(value):
         return z_min, z_max, ue
 
 
-def mongo_index(vacan):
+def check_vacancy(mongo_d, va_date):
+    """
+    Функция проверяет наличие вакансии в БД,
+    что бы исключить повтор записей.
+    """
 
-    last_index = index[-1]
-    index.append(last_index + 1)
+    dat_b = mongo_d['headhunter']
+    hh = dat_b.headhunter
 
-    return last_index
+    if bool(hh.find_one({'$and': [{'1_Name': va_date['1_Name']}, {'5_Link': va_date['5_Link']}]})):
+        return True
+
+    return False
 
 
-def mongo_start_db():
-    client = MongoClient('127.0.0.1', 27017)
-    db = client['headhunter']
+def mongo_index(mongo_d):
+    """
+    Поиск последний созданый индекс в базе данных Index
+    и добавление вновь созданного
+    """
+    max_index = 0
+    dat_bas = mongo_d['index']
 
-    return db.headhunter
+    for elem in dat_bas.index.find():
+        if elem['index'] > max_index:
+            max_index = elem['index']
 
+    dat_bas.index.insert_one({'index': max_index + 1})
+
+    return max_index + 1
+
+
+def find_vac(mongo_d, value):
+    """
+    Поиск вакансий с ЗП выше требуемой (value)
+    """
+    temp = mongo_d.find({'$or': [
+        {'2_Min_ZP': {'$gte': value}},
+        {'3_Max_ZP': {'$gte': value}}
+    ]})
+
+    return temp
+
+
+client = MongoClient('127.0.0.1', 27017)
+db = client['headhunter']
+db_vacancy = db.headhunter
 
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                          'AppleWebKit/537.36 (KHTML, like Gecko)'
@@ -49,13 +82,15 @@ url = "https://hh.ru"
 params = {'text': None,
           'area': 113, 'search_field': 'description', 'page': 0}
 
-item = 0
 i = 0
+
 params['text'] = input('Введите название проффессии: ')
+
 response = rq.get(url + '/search/vacancy/', params=params, headers=headers)
 dom = BeautifulSoup(response.text, 'html.parser')
-db_vacancy = mongo_start_db()
-db_vacancy.delete_many({})
+
+db_vacancy.delete_many({})  # Предварительная чистка БД hh для обучения
+client['index'].index.delete_many({})  # Предварительная чистка БД index для обучения
 
 try:
     page = int(dom.find_all('span', {'class': 'pager-item-not-in-short-range'})[-1].getText())
@@ -63,8 +98,7 @@ except:
     page = 1
 
 while i < page:
-    if item == 5:
-        break
+
     vacansies = dom.find_all('div', {'class': 'vacancy-serp-item'})
 
     for vacansy in vacansies:
@@ -74,26 +108,20 @@ while i < page:
         link = vacansy.find('a')['href']
         zp = vacansy.find('div', {'class': 'vacancy-serp-item__sidebar'})
 
-        vac_dict['_id'] = mongo_index(index)
+        vac_dict['_id'] = mongo_index(client)
         vac_dict['1_Name'] = name
-        vac_dict['2_Min_ZP.'], vac_dict['3_Max_ZP.'], vac_dict['4_UE'] = zp_check(zp)
+        vac_dict['2_Min_ZP'], vac_dict['3_Max_ZP'], vac_dict['4_UE'] = zp_check(zp)
         vac_dict['5_Link'] = link[:link.index('?')]
 
-        item += 1
-        db_vacancy.insert_one(vac_dict)
-
-        if item == 5:
-            break
+        if check_vacancy(client, vac_dict) is False:
+            db_vacancy.insert_one(vac_dict)
 
     i += 1
     params['page'] = i
     response = rq.get(url + '/search/vacancy/', params=params, headers=headers)
     dom = BeautifulSoup(response.text, 'html.parser')
 
-for item in db_vacancy.find({}):
+z_p = float(input('Введите желаемую ЗП: '))
+
+for item in find_vac(db_vacancy, z_p):
     pprint(item)
-# count = int(input(f'Сколько записей вывести на экран от 1 до {len(vac_list)}? '))
-# for i in range(count):
-#     print('*' * 40, '\n', f'№-{i + 1}')
-#     pprint(vac_list[i])
-#     print('*' * 40)
